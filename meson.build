@@ -71,6 +71,13 @@ is_developer_build = (get_option('developer') == 'auto' ? is_debug_build : get_o
 cc = meson.get_compiler('c')
 python = import('python').find_installation()
 
+if host_machine.system() == 'windows' and cc.has_argument('-Wno-int-conversion')
+    # Koishi's win32fiber backend assigns NULL to a size_t fallback; Clang 22
+    # treats that as an error. Keep the workaround in the parent build without
+    # moving the Koishi submodule to a local-only commit.
+    add_global_arguments('-Wno-int-conversion', language : 'c')
+endif
+
 subdir('scripts')
 
 config = configuration_data()
