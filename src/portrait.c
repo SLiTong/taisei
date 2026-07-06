@@ -40,6 +40,15 @@ int portrait_get_face_sprite_name(const char *charname, const char *face, size_t
 	RETURN_RESOURCE_NAME(charname, PORTRAIT_FACE_SUFFIX, face);
 }
 
+int portrait_get_redraw_sprite_name(const char *charname, const char *variant, const char *face, size_t bufsize, char buf[bufsize]) {
+	if(variant == NULL) {
+		RETURN_RESOURCE_NAME(charname, PORTRAIT_REDRAW_SUFFIX, face);
+	} else {
+		assert(bufsize >= strlen(PORTRAIT_PREFIX) + strlen(charname) + strlen(PORTRAIT_REDRAW_SUFFIX) + strlen(variant) + 1 + strlen(face) + 1);
+		return snprintf(buf, bufsize, PORTRAIT_PREFIX "%s" PORTRAIT_REDRAW_SUFFIX "%s_%s", charname, variant, face);
+	}
+}
+
 Sprite *portrait_get_face_sprite(const char *charname, const char *face) {
 	char buf[BUFFER_SIZE];
 	portrait_get_face_sprite_name(charname, face, sizeof(buf), buf);
@@ -50,6 +59,9 @@ void portrait_preload_face_sprite(ResourceGroup *rg, const char *charname, const
 	char buf[BUFFER_SIZE];
 	portrait_get_face_sprite_name(charname, face, sizeof(buf), buf);
 	res_group_preload(rg, RES_SPRITE, rflags, buf, NULL);
+
+	portrait_get_redraw_sprite_name(charname, NULL, face, sizeof(buf), buf);
+	res_group_preload(rg, RES_SPRITE, RESF_OPTIONAL, buf, NULL);
 }
 
 void portrait_render(Sprite *s_base, Sprite *s_face, Sprite *s_out) {
@@ -110,7 +122,82 @@ void portrait_render(Sprite *s_base, Sprite *s_face, Sprite *s_out) {
 	*s_out = s;
 }
 
+void portrait_render_full(Sprite *s_full, Sprite *s_out) {
+	r_state_push();
+
+	IntRect itc = sprite_denormalized_int_tex_coords(s_full);
+
+	uint tex_w = max(itc.w, 1);
+	uint tex_h = max(itc.h, 1);
+	float spr_w = s_full->extent.w;
+	float spr_h = s_full->extent.h;
+
+	Texture *ptex = r_texture_create(&(TextureParams) {
+		.type = TEX_TYPE_RGBA_8,
+		.width = tex_w,
+		.height = tex_h,
+		.filter.min = TEX_FILTER_LINEAR_MIPMAP_LINEAR,
+		.filter.mag = TEX_FILTER_LINEAR,
+		.wrap.s = TEX_WRAP_CLAMP,
+		.wrap.t = TEX_WRAP_CLAMP,
+		.mipmap_mode = TEX_MIPMAP_AUTO,
+		.mipmaps = 3,
+	});
+
+	Framebuffer *fb = r_framebuffer_create();
+	r_framebuffer_attach(fb, ptex, 0, FRAMEBUFFER_ATTACH_COLOR0);
+	r_framebuffer_viewport(fb, 0, 0, tex_w, tex_h);
+	r_framebuffer(fb);
+	r_framebuffer_clear(fb, BUFFER_COLOR, RGBA(0, 0, 0, 0), 1);
+
+	r_mat_proj_push_ortho(spr_w - s_full->padding.w, spr_h - s_full->padding.h);
+	r_mat_mv_push_identity();
+
+	r_draw_sprite(&(SpriteParams) {
+		.sprite_ptr = s_full,
+		.blend = BLEND_NONE,
+		.pos.x = spr_w * 0.5f - s_full->padding.offset.x,
+		.pos.y = spr_h * 0.5f - s_full->padding.offset.y,
+		.color = RGBA(1, 1, 1, 1),
+		.shader_ptr = res_shader("sprite_default"),
+	});
+	r_flush_sprites();
+
+	r_mat_mv_pop();
+	r_mat_proj_pop();
+	r_state_pop();
+	r_framebuffer_destroy(fb);
+
+	Sprite s = {};
+	s.tex = ptex;
+	s.extent = s_full->extent;
+	s.padding = s_full->padding;
+	s.tex_area.w = 1.0f;
+	s.tex_area.h = 1.0f;
+	*s_out = s;
+}
+
 void portrait_render_byname(const char *charname, const char *variant, const char *face, Sprite *s_out) {
+	char buf[BUFFER_SIZE];
+
+	if(variant != NULL) {
+		portrait_get_redraw_sprite_name(charname, variant, face, sizeof(buf), buf);
+		Sprite *redraw = res_sprite_optional(buf);
+
+		if(redraw != NULL) {
+			portrait_render_full(redraw, s_out);
+			return;
+		}
+	}
+
+	portrait_get_redraw_sprite_name(charname, NULL, face, sizeof(buf), buf);
+	Sprite *redraw = res_sprite_optional(buf);
+
+	if(redraw != NULL) {
+		portrait_render_full(redraw, s_out);
+		return;
+	}
+
 	portrait_render(
 		portrait_get_base_sprite(charname, variant),
 		portrait_get_face_sprite(charname, face),

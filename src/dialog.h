@@ -33,6 +33,8 @@ typedef struct DialogActor {
 	const char *face;
 
 	Sprite composite;
+	Sprite previous_composite;
+	float composite_transition;
 
 	float opacity;
 	float target_opacity;

@@ -28,6 +28,10 @@ void dialog_deinit(Dialog *d) {
 		if(a->composite.tex) {
 			r_texture_destroy(a->composite.tex);
 		}
+
+		if(a->previous_composite.tex) {
+			r_texture_destroy(a->previous_composite.tex);
+		}
 	}
 }
 
@@ -37,6 +41,7 @@ void dialog_add_actor(Dialog *d, DialogActor *a, const char *name, DialogSide si
 		.face = "normal",
 		.side = side,
 		.target_opacity = 1,
+		.composite_transition = 1,
 		.composite_dirty = true,
 		.speech_color = (side == DIALOG_SIDE_RIGHT) ? *RGB(0.6, 0.6, 1.0) : *RGB(1.0, 1.0, 1.0),
 	};
@@ -99,6 +104,13 @@ void dialog_update(Dialog *d) {
 		}
 
 		fapproach_asymptotic_p(&a->focus, a->target_focus, 0.12, 1e-3);
+
+		fapproach_p(&a->composite_transition, 1, 1/12.0f);
+
+		if(a->composite_transition >= 1 && a->previous_composite.tex != NULL) {
+			r_texture_destroy(a->previous_composite.tex);
+			a->previous_composite = (Sprite) {};
+		}
 	}
 }
 
@@ -227,14 +239,57 @@ static void dialog_actor_update_composite(DialogActor *a) {
 
 	log_debug("%s (%p) is dirty; face=%s; variant=%s", a->name, (void*)a, a->face, a->variant);
 
+	if(a->previous_composite.tex != NULL) {
+		log_debug("destroyed transition texture at %p", (void*)a->previous_composite.tex);
+		r_texture_destroy(a->previous_composite.tex);
+		a->previous_composite = (Sprite) {};
+	}
+
 	if(a->composite.tex != NULL) {
-		log_debug("destroyed texture at %p", (void*)a->composite.tex);
-		r_texture_destroy(a->composite.tex);
+		a->previous_composite = a->composite;
+		a->composite = (Sprite) {};
+		a->composite_transition = 0;
+	} else {
+		a->composite_transition = 1;
 	}
 
 	portrait_render_byname(a->name, a->variant, a->face, &a->composite);
 	log_debug("created texture at %p", (void*)a->composite.tex);
 	a->composite_dirty = false;
+}
+
+static float dialog_smoothstep(float t) {
+	return t * t * (3 - 2 * t);
+}
+
+static void dialog_draw_actor_sprite(DialogActor *a, Sprite *portrait, const Color *base_clr, double dialog_width, float alpha, float y_offset) {
+	if(alpha <= 0 || portrait->tex == NULL) {
+		return;
+	}
+
+	const float dialog_box_height = 110;
+	const float portrait_group_y = 64;
+	const float portrait_top_margin = 36;
+	const float portrait_bottom_margin = 52;
+	const float safe_bottom = VIEWPORT_H - dialog_box_height - portrait_bottom_margin;
+	const float max_visible_height = safe_bottom - portrait_top_margin;
+	float scale = 1;
+
+	if(portrait->h > max_visible_height) {
+		scale = max_visible_height / portrait->h;
+	}
+
+	Color clr = *base_clr;
+	color_mul_scalar(&clr, alpha);
+
+	r_draw_sprite(&(SpriteParams) {
+		.blend = BLEND_PREMUL_ALPHA,
+		.color = &clr,
+		.pos.x = (dialog_width - portrait->w) / 2 + 32 + a->offset.x,
+		.pos.y = safe_bottom - portrait_group_y - portrait->h * scale / 2 + a->offset.y + y_offset,
+		.scale = scale,
+		.sprite_ptr = portrait,
+	});
 }
 
 void dialog_draw(Dialog *dialog) {
@@ -293,13 +348,14 @@ void dialog_draw(Dialog *dialog) {
 		color_mul_scalar(&clr, a->opacity);
 
 		r_flush_sprites();
-		r_draw_sprite(&(SpriteParams) {
-			.blend = BLEND_PREMUL_ALPHA,
-			.color = &clr,
-			.pos.x = (dialog_width - portrait->w) / 2 + 32 + a->offset.x,
-			.pos.y = VIEWPORT_H - portrait->h / 2 + a->offset.y,
-			.sprite_ptr = portrait,
-		});
+
+		float transition = dialog_smoothstep(a->composite_transition);
+
+		if(a->previous_composite.tex != NULL && transition < 1) {
+			dialog_draw_actor_sprite(a, &a->previous_composite, &clr, dialog_width, 1 - transition, -8 * transition);
+		}
+
+		dialog_draw_actor_sprite(a, portrait, &clr, dialog_width, transition, 8 * (1 - transition));
 
 		r_mat_mv_pop();
 	}

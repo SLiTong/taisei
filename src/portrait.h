@@ -15,6 +15,7 @@
 #define PORTRAIT_PREFIX "dialog/"
 #define PORTRAIT_VARIANT_SUFFIX "_variant_"
 #define PORTRAIT_FACE_SUFFIX "_face_"
+#define PORTRAIT_REDRAW_SUFFIX "_redraw_"
 
 #define PORTRAIT_STATIC_FACE_SPRITE_NAME(charname, face) \
 	PORTRAIT_PREFIX #charname PORTRAIT_FACE_SUFFIX #face
@@ -34,6 +35,9 @@ void portrait_preload_base_sprite(ResourceGroup *rg, const char *charname, const
 int portrait_get_face_sprite_name(const char *charname, const char *face, size_t bufsize, char buf[bufsize])
 	attr_nonnull(1, 2, 4);
 
+int portrait_get_redraw_sprite_name(const char *charname, const char *variant, const char *face, size_t bufsize, char buf[bufsize])
+	attr_nonnull(1, 3, 5);
+
 void portrait_preload_face_sprite(ResourceGroup *rg, const char *charname, const char *variant, ResourceFlags rflags)
 	attr_nonnull(2, 3);
 
@@ -41,6 +45,9 @@ Sprite *portrait_get_face_sprite(const char *charname, const char *face)
 	attr_nonnull(1, 2) attr_returns_nonnull;
 
 void portrait_render(Sprite *s_base, Sprite *s_face, Sprite *s_out)
+	attr_nonnull_all;
+
+void portrait_render_full(Sprite *s_full, Sprite *s_out)
 	attr_nonnull_all;
 
 void portrait_render_byname(const char *charname, const char *variant, const char *face, Sprite *s_out)
