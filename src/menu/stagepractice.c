@@ -68,9 +68,25 @@ static void draw_stgpract_menu(MenuData *m) {
 
 			StageProgress *prog = stageinfo_get_progress(stg, progress.game_settings.difficulty, false);
 			if(e->action != NULL && prog && prog->global.num_cleared > 0) {
-				r_draw_sprite(&portrait_params);
-				portrait_params.sprite_ptr = res_sprite(bosses[i][1]);
-				r_draw_sprite(&portrait_params);
+				const char *face = strstr(bosses[i][1], PORTRAIT_FACE_SUFFIX);
+
+				if(face != NULL) {
+					face += strlen(PORTRAIT_FACE_SUFFIX);
+					char variant_name[128];
+					portrait_get_base_sprite_name(bosses[i][0], face, sizeof(variant_name), variant_name);
+					Sprite *variant = res_sprite_optional(variant_name);
+
+					if(variant != NULL) {
+						portrait_params.sprite_ptr = variant;
+						r_draw_sprite(&portrait_params);
+					} else {
+						r_draw_sprite(&portrait_params);
+						portrait_params.sprite_ptr = res_sprite(bosses[i][1]);
+						r_draw_sprite(&portrait_params);
+					}
+				} else {
+					r_draw_sprite(&portrait_params);
+				}
 			}
 		}
 

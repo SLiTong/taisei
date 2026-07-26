@@ -16,3 +16,8 @@ __pycache__
 *.swp
 .VERSION
 subprojects/.wraplock
+
+# Generated runtime resource packs; editable sources live under atlas/.
+/resources/00-taisei.pkgdir/gfx/**/*.ani
+/resources/00-taisei.pkgdir/gfx/**/*.spr
+/resources/00-taisei.pkgdir/gfx/*.zst

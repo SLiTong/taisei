@@ -9,6 +9,7 @@
 #pragma once
 #include "taisei.h"
 
+#include "resource/animation.h"
 #include "resource/resource.h"
 #include "resource/sprite.h"
 
@@ -41,7 +42,13 @@ Sprite *portrait_get_face_sprite(const char *charname, const char *face)
 	attr_nonnull(1, 2) attr_returns_nonnull;
 
 void portrait_render(Sprite *s_base, Sprite *s_face, Sprite *s_out)
-	attr_nonnull_all;
+	attr_nonnull(1, 3);
 
 void portrait_render_byname(const char *charname, const char *variant, const char *face, Sprite *s_out)
 	attr_nonnull(1, 3, 4);
+
+void portrait_render_byname_frame(const char *charname, const char *variant, const char *face, int frame, Sprite *s_out)
+	attr_nonnull(1, 3, 5);
+
+int portrait_get_frame_sequence_length_byname(const char *charname, const char *variant, const char *face)
+	attr_nonnull(1, 3);

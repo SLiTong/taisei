@@ -216,7 +216,6 @@ static void charprofile_logic(MenuData *m) {
 static void charprofile_draw(MenuData *m) {
 	assert(m->cursor < NUM_PROFILES);
 	r_state_push();
-
 	CharProfileContext *ctx = m->context;
 
 	draw_main_menu_bg(m, SCREEN_W/4+100, 0, 0.1 * (0.5 + 0.5 * m->drawdata[1]), "menu/mainmenubg", profiles[m->cursor].background);
@@ -254,6 +253,26 @@ static void charprofile_draw(MenuData *m) {
 	}
 
 	Sprite *spr = e->arg;
+
+	if(
+		selected != PROFILE_LOCKED &&
+		profiles[selected].faces[ctx->face] &&
+		strcmp(profiles[selected].faces[ctx->face], "normal")
+	) {
+		char variant_name[128];
+		portrait_get_base_sprite_name(
+			profiles[selected].name,
+			profiles[selected].faces[ctx->face],
+			sizeof(variant_name),
+			variant_name
+		);
+		Sprite *variant = res_sprite_optional(variant_name);
+
+		if(variant != NULL) {
+			spr = variant;
+		}
+	}
+
 	SpriteParams portrait_params = {
 		.pos = { SCREEN_W/2 + 240 + 320 * pofs, SCREEN_H - spr->h * 0.5 },
 		.sprite_ptr = spr,
@@ -262,18 +281,6 @@ static void charprofile_draw(MenuData *m) {
 	};
 
 	r_draw_sprite(&portrait_params);
-
-	if(selected != PROFILE_LOCKED) {
-		portrait_params.sprite_ptr = portrait_get_face_sprite(profiles[selected].name, profiles[selected].faces[ctx->face]);
-		r_draw_sprite(&portrait_params);
-		text_draw_wrapped(_("Press [Fire] for alternate expressions"), DESCRIPTION_WIDTH, &(TextParams) {
-			.align = ALIGN_LEFT,
-			.pos = { 25, 570 },
-			.font = "standard",
-			.shader_ptr = res_shader("text_default"),
-			.color = RGBA(0.9, 0.9, 0.9, 0.9),
-		});
-	}
 
 	r_mat_mv_push();
 	r_mat_mv_translate(SCREEN_W/4, SCREEN_H/3, 0);

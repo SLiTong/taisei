@@ -457,6 +457,10 @@ static bool events_handler_key_down(SDL_Event *event, void *arg) {
 	 */
 
 	if(!repeat) {
+		if(scan == SDL_SCANCODE_SPACE || scan == SDL_SCANCODE_RETURN) {
+			events_emit(TE_GAME_KEY_DOWN, KEY_SKIP, (void*)(intptr_t)INDEV_KEYBOARD, NULL);
+		}
+
 		if(scan == config_get_int(CONFIG_KEY_PAUSE) || scan == SDL_SCANCODE_ESCAPE) {
 			events_emit(TE_GAME_PAUSE, 0, NULL, NULL);
 		} else {
@@ -477,6 +481,10 @@ static bool events_handler_key_up(SDL_Event *event, void *arg) {
 	/*
 	 *  Emit game events
 	 */
+
+	if(scan == SDL_SCANCODE_SPACE || scan == SDL_SCANCODE_RETURN) {
+		events_emit(TE_GAME_KEY_UP, KEY_SKIP, (void*)(intptr_t)INDEV_KEYBOARD, NULL);
+	}
 
 	int key = config_key_from_scancode(scan);
 

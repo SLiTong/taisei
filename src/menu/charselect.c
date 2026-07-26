@@ -62,6 +62,31 @@ static const char facedefs[NUM_CHARACTERS][NUM_FACES][FACENAME_LEN] = {
 	},
 };
 
+static Sprite *char_menu_portrait_sprite(PlayerCharacter *pchar, const char *face_sprite_name, bool *draw_legacy_face) {
+	const char *face = strstr(face_sprite_name, PORTRAIT_FACE_SUFFIX);
+	*draw_legacy_face = false;
+
+	if(face == NULL) {
+		return portrait_get_base_sprite(pchar->lower_name, NULL);
+	}
+
+	face += strlen(PORTRAIT_FACE_SUFFIX);
+
+	if(strcmp(face, "normal")) {
+		char variant_name[128];
+		portrait_get_base_sprite_name(pchar->lower_name, face, sizeof(variant_name), variant_name);
+		Sprite *variant = res_sprite_optional(variant_name);
+
+		if(variant != NULL) {
+			return variant;
+		}
+
+		*draw_legacy_face = true;
+	}
+
+	return portrait_get_base_sprite(pchar->lower_name, NULL);
+}
+
 typedef struct CharMenuContext {
 	int8_t subshot;
 	int8_t char_draw_order[NUM_CHARACTERS];
@@ -183,7 +208,6 @@ void draw_char_menu(MenuData *menu) {
 		assert(pchar != NULL);
 		assert(pchar->id == i);
 
-		Sprite *spr = portrait_get_base_sprite(pchar->lower_name, NULL);  // TODO cache this
 		const char *name = _(pchar->full_name);
 		const char *title = _(pchar->title);
 
@@ -204,6 +228,9 @@ void draw_char_menu(MenuData *menu) {
 			face = facedefs[i][F_UNAMUSED];
 		}
 
+		bool draw_legacy_face = false;
+		Sprite *spr = char_menu_portrait_sprite(pchar, face, &draw_legacy_face);  // TODO cache this
+
 		float pofs = max(0.0f, e->drawdata * 1.5f - 0.5f);
 		pofs = glm_ease_back_in(pofs);
 
@@ -222,8 +249,11 @@ void draw_char_menu(MenuData *menu) {
 		};
 
 		r_draw_sprite(&portrait_params);
-		portrait_params.sprite_ptr = res_sprite(face);
-		r_draw_sprite(&portrait_params);
+
+		if(draw_legacy_face) {
+			portrait_params.sprite_ptr = res_sprite(face);
+			r_draw_sprite(&portrait_params);
+		}
 
 		r_mat_mv_push();
 		r_mat_mv_translate(SCREEN_W/4, SCREEN_H/3, 0);

@@ -14,6 +14,8 @@
 #include "resource/sprite.h"
 #include "coroutine/coevent.h"
 
+#define DIALOG_PORTRAIT_CACHE_SLOTS 16
+
 typedef enum DialogSide {
 	DIALOG_SIDE_RIGHT,
 	DIALOG_SIDE_LEFT,
@@ -33,6 +35,8 @@ typedef struct DialogActor {
 	const char *face;
 
 	Sprite composite;
+	Sprite composite_cache[DIALOG_PORTRAIT_CACHE_SLOTS];
+	int composite_cache_frames[DIALOG_PORTRAIT_CACHE_SLOTS];
 
 	float opacity;
 	float target_opacity;
@@ -46,6 +50,7 @@ typedef struct DialogActor {
 	DialogSide side;
 
 	bool composite_dirty;
+	int composite_anim_frame;
 } DialogActor;
 
 typedef struct DialogTextBuffer {

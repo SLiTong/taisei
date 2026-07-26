@@ -99,6 +99,13 @@ typedef struct PowerSurgeBonus {
 	float discharge_damage;
 } PowerSurgeBonus;
 
+typedef enum PlayerCutinKind {
+	PLR_CUTIN_BOMB,
+	PLR_CUTIN_POWER,
+	PLR_CUTIN_SCORE,
+	PLR_CUTIN_COUNT,
+} PlayerCutinKind;
+
 DEFINE_ENTITY_TYPE(Player, {
 	cmplx pos;
 	cmplx velocity;
@@ -107,7 +114,7 @@ DEFINE_ENTITY_TYPE(Player, {
 
 	struct PlayerMode *mode;
 	AniPlayer ani;
-	Sprite bomb_portrait;
+	Sprite cutin_portraits[PLR_CUTIN_COUNT];
 
 	Stats stats;
 
@@ -162,6 +169,8 @@ DEFINE_ENTITY_TYPE(Player, {
 
 	float focus_circle_alpha;
 	float bomb_cutin_alpha;
+	PlayerCutinKind cutin_kind;
+	int last_score_cutin_time;
 
 	bool gamepadmove;
 	bool iddqd;

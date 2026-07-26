@@ -14,6 +14,7 @@
 #include "global.h"
 #include "i18n/i18n.h"
 #include "plrmodes.h"
+#include "portrait.h"
 #include "projectile.h"
 #include "replay/stage.h"
 #include "replay/struct.h"
@@ -46,6 +47,7 @@ void player_init(Player *plr) {
 		.continuetime = -1,
 		.bomb_triggertime = -1,
 		.bomb_endtime = 0,
+		.last_score_cutin_time = -9999,
 		.mode = plrmode_find(0, 0),
 	};
 }
@@ -58,6 +60,9 @@ void player_stage_pre_init(Player *plr) {
 	plr->deathtime = -1;
 	plr->axis_lr = 0;
 	plr->axis_ud = 0;
+	plr->bomb_cutin_alpha = 0;
+	plr->cutin_kind = PLR_CUTIN_BOMB;
+	plr->last_score_cutin_time = -9999;
 }
 
 double player_property(Player *plr, PlrProperty prop) {
@@ -70,6 +75,34 @@ static DamageResult ent_damage_player(EntityInterface *ent, const DamageInfo *dm
 DECLARE_TASK(player_logic, { BoxedPlayer plr; });
 DECLARE_TASK(player_indicators, { BoxedPlayer plr; });
 
+static const char *player_cutin_face(Player *plr, PlayerCutinKind kind) {
+	const char *name = plr->mode->character->lower_name;
+
+	switch(kind) {
+		case PLR_CUTIN_POWER:
+			return !strcmp(name, "marisa") ? "happy" : "surprised";
+
+		case PLR_CUTIN_SCORE:
+			return "smug";
+
+		case PLR_CUTIN_BOMB:
+			if(!strcmp(name, "reimu")) {
+				return "assertive";
+			}
+
+			if(!strcmp(name, "youmu")) {
+				return "chuuni";
+			}
+
+			return "smug";
+
+		case PLR_CUTIN_COUNT:
+			break;
+	}
+
+	return "normal";
+}
+
 void player_stage_post_init(Player *plr) {
 	assert(plr->mode != NULL);
 
@@ -78,7 +111,12 @@ void player_stage_post_init(Player *plr) {
 	assert(plr->mode->character != NULL);
 	assert(plr->mode->dialog != NULL);
 
-	plrchar_render_bomb_portrait(plr->mode->character, &plr->bomb_portrait);
+	const char *charname = plr->mode->character->lower_name;
+
+	for(PlayerCutinKind kind = 0; kind < PLR_CUTIN_COUNT; ++kind) {
+		portrait_render_byname(charname, NULL, player_cutin_face(plr, kind), &plr->cutin_portraits[kind]);
+	}
+
 	aniplayer_create(&plr->ani, plrchar_player_anim(plr->mode->character), "main");
 
 	plr->ent.draw_layer = LAYER_PLAYER;
@@ -104,7 +142,11 @@ void player_stage_post_init(Player *plr) {
 
 void player_free(Player *plr) {
 	COEVENT_CANCEL_ARRAY(plr->events);
-	r_texture_destroy(plr->bomb_portrait.tex);
+
+	for(PlayerCutinKind kind = 0; kind < PLR_CUTIN_COUNT; ++kind) {
+		r_texture_destroy(plr->cutin_portraits[kind].tex);
+	}
+
 	aniplayer_free(&plr->ani);
 	ent_unregister(&plr->ent);
 }
@@ -166,6 +208,11 @@ int player_get_effective_power(Player *plr) {
 	return clamp(p, 0, PLR_MAX_POWER_EFFECTIVE);
 }
 
+static void player_trigger_cutin(Player *plr, PlayerCutinKind kind) {
+	plr->cutin_kind = kind;
+	plr->bomb_cutin_alpha = 1;
+}
+
 void player_move(Player *plr, cmplx delta) {
 	delta *= player_property(plr, PLR_PROP_SPEED);
 	plr->uncapped_velocity = delta;
@@ -183,16 +230,91 @@ void player_draw_overlay(Player *plr) {
 		return;
 	}
 
+	PlayerCutinKind kind = plr->cutin_kind;
+	Color accent = *RGBA(1.0, 0.70, 0.92, 1.0);
+	Color shadow = *RGBA(0.25, 0.08, 0.20, 1.0);
+	const char *label = plr->mode->spellcard_name;
+	bool translate_label = true;
+
+	switch(kind) {
+		case PLR_CUTIN_POWER:
+			accent = *RGBA(0.48, 0.95, 1.0, 1.0);
+			shadow = *RGBA(0.04, 0.18, 0.28, 1.0);
+			label = "Power Surge!";
+			translate_label = false;
+			break;
+
+		case PLR_CUTIN_SCORE:
+			accent = *RGBA(1.0, 0.82, 0.36, 1.0);
+			shadow = *RGBA(0.28, 0.12, 0.04, 1.0);
+			label = "Bonus Bloom!";
+			translate_label = false;
+			break;
+
+		case PLR_CUTIN_BOMB:
+			break;
+
+		case PLR_CUTIN_COUNT:
+			break;
+	}
+
 	r_state_push();
 	r_shader("sprite_default");
 
 	float char_in = clamp(a * 1.5f, 0, 1);
 	float char_out = min(1, 2 - (2 * a));
-	float char_opacity_in = 0.75 * min(1, a * 5);
+	float char_opacity_in = 0.96f * min(1, a * 5);
 	float char_opacity = char_opacity_in * char_out * char_out;
 	float char_xofs = -20 * a;
+	float spell_in = min(1, a * 3.0);
+	float spell_out = min(1, 3 - (3 * a));
+	float spell_opacity = min(1, a * 5) * spell_out * spell_out;
 
-	Sprite *char_spr = &plr->bomb_portrait;
+	Sprite *char_spr = &plr->cutin_portraits[kind];
+	float char_fit_h = (VIEWPORT_H - 24.0f) / max(1.0f, char_spr->h);
+	float char_fit_w = (VIEWPORT_W * 0.70f) / max(1.0f, char_spr->w);
+	float char_fit = min(0.94f, min(char_fit_h, char_fit_w));
+	float char_scale = char_fit * (kind == PLR_CUTIN_BOMB ? 1.0f : 1.08f);
+	float char_w = char_spr->w * char_scale;
+	float char_h = char_spr->h * char_scale;
+
+	float wash_opacity = 0.55f * spell_opacity * min(1, char_in * 2);
+	r_shader_standard_notex();
+	r_color4(shadow.r * 0.45f, shadow.g * 0.45f, shadow.b * 0.45f, wash_opacity);
+	r_mat_mv_push();
+	r_mat_mv_translate(VIEWPORT_W * 0.38f, VIEWPORT_H * 0.5f, 0);
+	r_mat_mv_scale(VIEWPORT_W * 0.82f, VIEWPORT_H, 1);
+	r_draw_quad();
+	r_mat_mv_pop();
+	r_shader("sprite_default");
+	r_color4(1, 1, 1, 1);
+
+	Sprite *halo_spr = res_sprite("part/blast_huge_halo");
+	for(int i = 0; i < 4; ++i) {
+		float phase = a * M_TAU + i * M_PI * 0.5f;
+		float pulse = 0.6f + 0.4f * sin(phase);
+		Color c = accent;
+		c.a = 0.018f * spell_opacity * (1.0f - 0.12f * i);
+
+		r_draw_sprite(&(SpriteParams) {
+			.sprite_ptr = halo_spr,
+			.pos = { VIEWPORT_W * (0.68f + 0.035f * cos(phase)), VIEWPORT_H * (0.45f + 0.055f * sin(phase)) },
+			.color = &c,
+			.scale.both = 1.3f + 0.20f * i + 0.15f * pulse,
+			.rotation.angle = phase,
+		});
+	}
+
+	r_flush_sprites();
+	r_shader_standard_notex();
+	r_color4(shadow.r * 0.30f, shadow.g * 0.30f, shadow.b * 0.30f, 0.30f * spell_opacity);
+	r_mat_mv_push();
+	r_mat_mv_translate(VIEWPORT_W * 0.38f, VIEWPORT_H * 0.5f, 0);
+	r_mat_mv_scale(VIEWPORT_W * 0.82f, VIEWPORT_H, 1);
+	r_draw_quad();
+	r_mat_mv_pop();
+	r_shader("sprite_default");
+	r_color4(1, 1, 1, 1);
 
 	for(int i = 1; i <= 3; ++i) {
 		float t = a * 200;
@@ -201,27 +323,47 @@ void player_draw_overlay(Player *plr) {
 		float end = start + dur;
 		float ofs = 0.2 * dur * (i - 1);
 		float o = 1 - smoothstep(start + ofs, end + ofs, t);
+		Color trail = shadow;
+		trail.r = 0.35f * shadow.r + 0.65f * (i == 1 ? accent.r : 0.16f);
+		trail.g = 0.35f * shadow.g + 0.65f * (i == 2 ? accent.g : 0.16f);
+		trail.b = 0.35f * shadow.b + 0.65f * (i == 3 ? accent.b : 0.20f);
+		trail.a = char_opacity_in * 0.54f * (1 - char_in * o) * o;
 
 		r_draw_sprite(&(SpriteParams) {
 			.sprite_ptr = char_spr,
-			.pos = { char_spr->w * 0.5 + VIEWPORT_W * powf(1 - char_in, 4 - i * 0.3f) - i + char_xofs, VIEWPORT_H - char_spr->h * 0.5f },
-			.color = color_mul_scalar(color_add(RGBA(0.2, 0.2, 0.2, 0), RGBA(i==1, i==2, i==3, 0)), char_opacity_in * (1 - char_in * o) * o),
+			.pos = { char_w * 0.5f + VIEWPORT_W * powf(1 - char_in, 4 - i * 0.3f) - i + char_xofs, VIEWPORT_H - char_h * 0.5f },
+			.color = &trail,
 			.flip.x = true,
-			.scale.both = 1.0f + 0.02f * (min(1, a * 1.2f)) + i * 0.5 * powf(1 - o, 2),
+			.scale.both = char_scale * (1.0f + 0.02f * (min(1, a * 1.2f)) + i * 0.5f * powf(1 - o, 2)),
 		});
 	}
 
+	Color glam = accent;
+	glam.a = char_opacity * 0.055f * min(1, char_in * 2) * (1 - min(1, (1 - char_out) * 5));
 	r_draw_sprite(&(SpriteParams) {
 		.sprite_ptr = char_spr,
-		.pos = { char_spr->w * 0.5f + VIEWPORT_W * powf(1 - char_in, 4) + char_xofs, VIEWPORT_H - char_spr->h * 0.5f },
-		.color = RGBA_MUL_ALPHA(1, 1, 1, char_opacity * min(1, char_in * 2) * (1 - min(1, (1 - char_out) * 5))),
-		.flip.x = true,
-		.scale.both = 1.0 + 0.1 * (1 - char_out),
+		.pos = { VIEWPORT_W - char_w * 0.5f - 20.0f + 12.0f * sin(a * M_PI), VIEWPORT_H - char_h * 0.5f },
+		.color = &glam,
+		.scale.both = char_scale * (0.92f + 0.10f * sin(a * M_PI)),
 	});
 
-	float spell_in = min(1, a * 3.0);
-	float spell_out = min(1, 3 - (3 * a));
-	float spell_opacity = min(1, a * 5) * spell_out * spell_out;
+	Color cutin_shadow = shadow;
+	cutin_shadow.a = char_opacity * 0.46f * min(1, char_in * 2) * (1 - min(1, (1 - char_out) * 5));
+	r_draw_sprite(&(SpriteParams) {
+		.sprite_ptr = char_spr,
+		.pos = { char_w * 0.5f + VIEWPORT_W * powf(1 - char_in, 4) + char_xofs + 6.0f, VIEWPORT_H - char_h * 0.5f + 5.0f },
+		.color = &cutin_shadow,
+		.flip.x = true,
+		.scale.both = char_scale * (1.03f + 0.1f * (1 - char_out)),
+	});
+
+	r_draw_sprite(&(SpriteParams) {
+		.sprite_ptr = char_spr,
+		.pos = { char_w * 0.5f + VIEWPORT_W * powf(1 - char_in, 4) + char_xofs, VIEWPORT_H - char_h * 0.5f },
+		.color = RGBA_MUL_ALPHA(1, 1, 1, char_opacity * min(1, char_in * 2) * (1 - min(1, (1 - char_out) * 5))),
+		.flip.x = true,
+		.scale.both = char_scale * (1.0f + 0.1f * (1 - char_out)),
+	});
 
 	float spell_x = 128 * (1 - powf(1 - spell_in, 5)) + (VIEWPORT_W + 256) * powf(1 - spell_in, 3);
 	float spell_y = VIEWPORT_H - 128 * sqrtf(a);
@@ -231,7 +373,7 @@ void player_draw_overlay(Player *plr) {
 	r_draw_sprite(&(SpriteParams) {
 		.sprite_ptr = spell_spr,
 		.pos = { spell_x, spell_y },
-		.color = color_mul_scalar(RGBA(1, 1, 1, spell_in * 0.5), spell_opacity),
+		.color = color_mul_scalar(RGBA(1, 1, 1, spell_in * 0.34), spell_opacity),
 		.scale.both = 3 - 2 * (1 - pow(1 - spell_in, 3)) + 2 * (1 - spell_out),
 	});
 
@@ -249,7 +391,7 @@ void player_draw_overlay(Player *plr) {
 
 	r_mat_mv_push();
 	r_mat_mv_scale(2 - 1 * spell_opacity, 2 - 1 * spell_opacity, 1);
-	text_draw(_(plr->mode->spellcard_name), &tp);
+	text_draw(translate_label ? _(label) : label, &tp);
 	r_mat_mv_pop();
 
 	r_mat_mv_pop();
@@ -695,7 +837,7 @@ static bool player_bomb(Player *plr) {
 
 		plr->bomb_triggertime = global.frames;
 		plr->bomb_endtime = plr->bomb_triggertime + bomb_time;
-		plr->bomb_cutin_alpha = 1;
+		player_trigger_cutin(plr, PLR_CUTIN_BOMB);
 
 		assert(player_is_alive(plr));
 		collect_all_items(1);
@@ -725,11 +867,12 @@ static bool player_powersurge(Player *plr) {
 	plr->powersurge.player_power = plr->power_stored;
 	player_powersurge_calc_bonus(plr, &plr->powersurge.bonus);
 	player_add_power(plr, -PLR_POWERSURGE_POWERCOST);
+	player_trigger_cutin(plr, PLR_CUTIN_POWER);
 
 	play_sfx("powersurge_start");
 
 	collect_all_items(1);
-	stagetext_add(_("Power Surge!"), plr->pos - 64 * I, ALIGN_CENTER, res_font("standard"), RGBA(0.75, 0.75, 0.75, 0.75), 0, 45, 10, 20);
+	stagetext_add("Power Surge!", plr->pos - 64 * I, ALIGN_CENTER, res_font("standard"), RGBA(0.75, 0.75, 0.75, 0.75), 0, 45, 10, 20);
 
 	INVOKE_TASK(powersurge_player_particles, ENT_BOX(plr));
 
@@ -1109,6 +1252,12 @@ PlayerEventResult player_event(
 
 	switch(type) {
 		case EV_PRESS:
+			if(dialog_is_active(global.dialog) && value == KEY_SKIP) {
+				useful = player_setinputflag(plr, value, true);
+				useful = dialog_page(global.dialog) || useful;
+				break;
+			}
+
 			if(dialog_is_active(global.dialog) && (value == KEY_SHOT || value == KEY_BOMB)) {
 				useful = dialog_page(global.dialog);
 				break;
@@ -1592,6 +1741,16 @@ void player_add_points(Player *plr, uint points, cmplx location) {
 	}
 
 	add_score_text(plr, location, points, false);
+
+	if(
+		points >= 250000 &&
+		global.frames - plr->last_score_cutin_time > 240 &&
+		player_is_alive(plr)
+	) {
+		plr->last_score_cutin_time = global.frames;
+		player_trigger_cutin(plr, PLR_CUTIN_SCORE);
+		play_sfx("extra_life");
+	}
 }
 
 void player_add_piv(Player *plr, uint piv, cmplx location) {
@@ -1707,6 +1866,8 @@ void player_preload(ResourceGroup *rg) {
 		"focus",
 		"part/blast_huge_halo",
 		"part/powersurge_field",
+		"spell",
+		"star",
 	NULL);
 
 	res_group_preload(rg, RES_SFX, flags | RESF_OPTIONAL,

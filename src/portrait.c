@@ -30,10 +30,36 @@ Sprite *portrait_get_base_sprite(const char *charname, const char *variant) {
 	return res_sprite(buf);
 }
 
+static Animation *portrait_get_base_animation_optional(const char *charname, const char *variant) {
+	char buf[BUFFER_SIZE];
+	portrait_get_base_sprite_name(charname, variant, sizeof(buf), buf);
+	return res_anim_optional(buf);
+}
+
+static Sprite *portrait_get_base_sprite_frame(const char *charname, const char *variant, int frame) {
+	Animation *anim = portrait_get_base_animation_optional(charname, variant);
+
+	if(anim != NULL) {
+		return animation_get_frame(anim, get_ani_sequence(anim, "main"), frame);
+	}
+
+	return portrait_get_base_sprite(charname, variant);
+}
+
+static int portrait_animation_main_sequence_length(Animation *anim) {
+	if(anim == NULL) {
+		return 1;
+	}
+
+	AniSequence *seq = get_ani_sequence(anim, "main");
+	return max(seq->length, 1);
+}
+
 void portrait_preload_base_sprite(ResourceGroup *rg, const char *charname, const char *variant, ResourceFlags rflags) {
 	char buf[BUFFER_SIZE];
 	portrait_get_base_sprite_name(charname, variant, sizeof(buf), buf);
 	res_group_preload(rg, RES_SPRITE, rflags, buf, NULL);
+	res_group_preload(rg, RES_ANIM, rflags | RESF_OPTIONAL, buf, NULL);
 }
 
 int portrait_get_face_sprite_name(const char *charname, const char *face, size_t bufsize, char buf[bufsize]) {
@@ -46,8 +72,25 @@ Sprite *portrait_get_face_sprite(const char *charname, const char *face) {
 	return res_sprite(buf);
 }
 
+static bool portrait_base_has_baked_face(const char *charname) {
+	return !strcmp(charname, "reimu") || !strcmp(charname, "marisa") || !strcmp(charname, "youmu") ||
+	       !strcmp(charname, "elly") || !strcmp(charname, "hina") || !strcmp(charname, "iku") ||
+	       !strcmp(charname, "yumemi");
+}
+
 void portrait_preload_face_sprite(ResourceGroup *rg, const char *charname, const char *face, ResourceFlags rflags) {
 	char buf[BUFFER_SIZE];
+
+	if(strcmp(face, "normal")) {
+		portrait_get_base_sprite_name(charname, face, sizeof(buf), buf);
+		res_group_preload(rg, RES_SPRITE, rflags | RESF_OPTIONAL, buf, NULL);
+		res_group_preload(rg, RES_ANIM, rflags | RESF_OPTIONAL, buf, NULL);
+	}
+
+	if(portrait_base_has_baked_face(charname)) {
+		return;
+	}
+
 	portrait_get_face_sprite_name(charname, face, sizeof(buf), buf);
 	res_group_preload(rg, RES_SPRITE, rflags, buf, NULL);
 }
@@ -55,12 +98,10 @@ void portrait_preload_face_sprite(ResourceGroup *rg, const char *charname, const
 void portrait_render(Sprite *s_base, Sprite *s_face, Sprite *s_out) {
 	r_state_push();
 
-	IntRect itc = sprite_denormalized_int_tex_coords(s_base);
-
-	uint tex_w = max(itc.w, 1);
-	uint tex_h = max(itc.h, 1);
 	float spr_w = s_base->extent.w;
 	float spr_h = s_base->extent.h;
+	uint tex_w = max((uint)ceilf(spr_w), 1);
+	uint tex_h = max((uint)ceilf(spr_h), 1);
 
 	Texture *ptex = r_texture_create(&(TextureParams) {
 		.type = TEX_TYPE_RGBA_8,
@@ -80,20 +121,24 @@ void portrait_render(Sprite *s_base, Sprite *s_face, Sprite *s_out) {
 	r_framebuffer(fb);
 	r_framebuffer_clear(fb, BUFFER_COLOR, RGBA(0, 0, 0, 0), 1);
 
-	r_mat_proj_push_ortho(spr_w - s_base->padding.w, spr_h - s_base->padding.h);
+	r_mat_proj_push_ortho(tex_w, tex_h);
 	r_mat_mv_push_identity();
 
 	SpriteParams sp = {};
 	sp.sprite_ptr = s_base;
 	sp.blend = BLEND_NONE;
-	sp.pos.x = spr_w * 0.5f - s_base->padding.offset.x;
-	sp.pos.y = spr_h * 0.5f - s_base->padding.offset.y;
+	sp.pos.x = tex_w * 0.5f;
+	sp.pos.y = tex_h * 0.5f;
 	sp.color = RGBA(1, 1, 1, 1);
 	sp.shader_ptr = res_shader("sprite_default");
 	r_draw_sprite(&sp);
-	sp.blend = BLEND_PREMUL_ALPHA;
-	sp.sprite_ptr = s_face;
-	r_draw_sprite(&sp);
+
+	if(s_face != NULL) {
+		sp.blend = BLEND_PREMUL_ALPHA;
+		sp.sprite_ptr = s_face;
+		r_draw_sprite(&sp);
+	}
+
 	r_flush_sprites();
 
 	r_mat_mv_pop();
@@ -103,17 +148,60 @@ void portrait_render(Sprite *s_base, Sprite *s_face, Sprite *s_out) {
 
 	Sprite s = {};
 	s.tex = ptex;
-	s.extent = s_base->extent;
-	s.padding = s_base->padding;
+	s.extent.w = tex_w;
+	s.extent.h = tex_h;
+	s.padding = (FloatRect) {};
 	s.tex_area.w = 1.0f;
 	s.tex_area.h = 1.0f;
 	*s_out = s;
 }
 
-void portrait_render_byname(const char *charname, const char *variant, const char *face, Sprite *s_out) {
+void portrait_render_byname_frame(const char *charname, const char *variant, const char *face, int frame, Sprite *s_out) {
+	Sprite *base = portrait_get_base_sprite_frame(charname, variant, frame);
+	Sprite *face_sprite = NULL;
+	bool fullbody_variant = variant != NULL;
+
+	if(variant == NULL && strcmp(face, "normal")) {
+		char buf[BUFFER_SIZE];
+		portrait_get_base_sprite_name(charname, face, sizeof(buf), buf);
+		Animation *emotion_anim = res_anim_optional(buf);
+		Sprite *emotion_variant = emotion_anim != NULL
+			? animation_get_frame(emotion_anim, get_ani_sequence(emotion_anim, "main"), frame)
+			: res_sprite_optional(buf);
+
+		if(emotion_variant != NULL) {
+			base = emotion_variant;
+			fullbody_variant = true;
+		}
+	}
+
+	// AI regenerated portraits already include their expressions in the full-body sprite.
+	// Keep legacy face overlays only for characters that still depend on faceless bases.
+	if(!fullbody_variant && !portrait_base_has_baked_face(charname)) {
+		face_sprite = portrait_get_face_sprite(charname, face);
+	}
+
 	portrait_render(
-		portrait_get_base_sprite(charname, variant),
-		portrait_get_face_sprite(charname, face),
+		base,
+		face_sprite,
 		s_out
 	);
+}
+
+void portrait_render_byname(const char *charname, const char *variant, const char *face, Sprite *s_out) {
+	portrait_render_byname_frame(charname, variant, face, 0, s_out);
+}
+
+int portrait_get_frame_sequence_length_byname(const char *charname, const char *variant, const char *face) {
+	if(variant == NULL && strcmp(face, "normal")) {
+		char buf[BUFFER_SIZE];
+		portrait_get_base_sprite_name(charname, face, sizeof(buf), buf);
+		Animation *emotion_anim = res_anim_optional(buf);
+
+		if(emotion_anim != NULL) {
+			return portrait_animation_main_sequence_length(emotion_anim);
+		}
+	}
+
+	return portrait_animation_main_sequence_length(portrait_get_base_animation_optional(charname, variant));
 }

@@ -41,6 +41,19 @@ void plrchar_preload(PlayerCharacter *pc, ResourceGroup *rg) {
 	portrait_preload_base_sprite(rg, name, NULL, RESF_DEFAULT);
 	portrait_preload_face_sprite(rg, name, "normal", RESF_DEFAULT);
 
+	if(!strcmp(name, "reimu")) {
+		portrait_preload_face_sprite(rg, name, "assertive", RESF_OPTIONAL);
+		portrait_preload_face_sprite(rg, name, "smug", RESF_OPTIONAL);
+		portrait_preload_face_sprite(rg, name, "surprised", RESF_OPTIONAL);
+	} else if(!strcmp(name, "marisa")) {
+		portrait_preload_face_sprite(rg, name, "happy", RESF_OPTIONAL);
+		portrait_preload_face_sprite(rg, name, "smug", RESF_OPTIONAL);
+	} else if(!strcmp(name, "youmu")) {
+		portrait_preload_face_sprite(rg, name, "chuuni", RESF_OPTIONAL);
+		portrait_preload_face_sprite(rg, name, "smug", RESF_OPTIONAL);
+		portrait_preload_face_sprite(rg, name, "surprised", RESF_OPTIONAL);
+	}
+
 	char buf[64];
 	plrchar_player_anim_name(pc, sizeof(buf), buf);
 	res_group_preload(rg, RES_ANIM, RESF_DEFAULT, buf, NULL);

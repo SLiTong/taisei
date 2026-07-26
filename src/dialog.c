@@ -12,6 +12,41 @@
 #include "i18n/i18n.h"
 #include "portrait.h"
 #include "resource/font.h"
+#include "util/env.h"
+
+static void dialog_actor_reset_composite_cache_keys(DialogActor *a) {
+	for(uint i = 0; i < ARRAY_SIZE(a->composite_cache_frames); ++i) {
+		a->composite_cache_frames[i] = -1;
+	}
+}
+
+static void dialog_actor_destroy_composite_cache(DialogActor *a) {
+	for(uint i = 0; i < ARRAY_SIZE(a->composite_cache); ++i) {
+		if(a->composite_cache[i].tex) {
+			r_texture_destroy(a->composite_cache[i].tex);
+			a->composite_cache[i] = (Sprite) {};
+		}
+	}
+
+	a->composite = (Sprite) {};
+	dialog_actor_reset_composite_cache_keys(a);
+}
+
+static void dialog_actor_invalidate_composite_cache(DialogActor *a) {
+	dialog_actor_destroy_composite_cache(a);
+	a->composite_dirty = true;
+	a->composite_anim_frame = -1;
+}
+
+static bool dialog_portrait_static_pose(void) {
+	static int enabled = -1;
+
+	if(enabled < 0) {
+		enabled = env_get_int("TAISEI_DIALOG_PORTRAIT_STATIC_POSE", 0);
+	}
+
+	return enabled;
+}
 
 void dialog_init(Dialog *d) {
 	*d = (typeof(*d)) {};
@@ -25,9 +60,7 @@ void dialog_deinit(Dialog *d) {
 	COEVENT_CANCEL_ARRAY(d->events);
 
 	for(DialogActor *a = d->actors.first; a; a = a->next) {
-		if(a->composite.tex) {
-			r_texture_destroy(a->composite.tex);
-		}
+		dialog_actor_destroy_composite_cache(a);
 	}
 }
 
@@ -38,9 +71,11 @@ void dialog_add_actor(Dialog *d, DialogActor *a, const char *name, DialogSide si
 		.side = side,
 		.target_opacity = 1,
 		.composite_dirty = true,
+		.composite_anim_frame = -1,
 		.speech_color = (side == DIALOG_SIDE_RIGHT) ? *RGB(0.6, 0.6, 1.0) : *RGB(1.0, 1.0, 1.0),
 	};
 
+	dialog_actor_reset_composite_cache_keys(a);
 	alist_append(&d->actors, a);
 }
 
@@ -48,7 +83,7 @@ void dialog_actor_set_face(DialogActor *a, const char *face) {
 	log_debug("[%s] %s --> %s", a->name, a->face, face);
 	if(a->face != face) {
 		a->face = face;
-		a->composite_dirty = true;
+		dialog_actor_invalidate_composite_cache(a);
 	}
 }
 
@@ -56,7 +91,7 @@ void dialog_actor_set_variant(DialogActor *a, const char *variant) {
 	log_debug("[%s] %s --> %s", a->name, a->variant, variant);
 	if(a->variant != variant) {
 		a->variant = variant;
-		a->composite_dirty = true;
+		dialog_actor_invalidate_composite_cache(a);
 	}
 }
 
@@ -217,24 +252,35 @@ void dialog_end(Dialog *d) {
 	dialog_deinit(d);
 }
 
-static void dialog_actor_update_composite(DialogActor *a) {
+static void dialog_actor_update_composite(DialogActor *a, int anim_frame) {
 	assume(a->name != NULL);
 	assume(a->face != NULL);
 
-	if(!a->composite_dirty) {
-		return;
+	if(a->composite_dirty) {
+		dialog_actor_destroy_composite_cache(a);
+		a->composite_dirty = false;
 	}
 
-	log_debug("%s (%p) is dirty; face=%s; variant=%s", a->name, (void*)a, a->face, a->variant);
+	int sequence_length = portrait_get_frame_sequence_length_byname(a->name, a->variant, a->face);
+	int sequence_frame = anim_frame % sequence_length;
+	int cache_slot = sequence_frame % DIALOG_PORTRAIT_CACHE_SLOTS;
 
-	if(a->composite.tex != NULL) {
-		log_debug("destroyed texture at %p", (void*)a->composite.tex);
-		r_texture_destroy(a->composite.tex);
+	if(a->composite_cache_frames[cache_slot] != sequence_frame) {
+		log_debug("%s (%p) cache miss; face=%s; variant=%s; frame=%i; slot=%i",
+			a->name, (void*)a, a->face, a->variant, sequence_frame, cache_slot);
+
+		if(a->composite_cache[cache_slot].tex != NULL) {
+			r_texture_destroy(a->composite_cache[cache_slot].tex);
+			a->composite_cache[cache_slot] = (Sprite) {};
+		}
+
+		portrait_render_byname_frame(a->name, a->variant, a->face, sequence_frame, &a->composite_cache[cache_slot]);
+		a->composite_cache_frames[cache_slot] = sequence_frame;
+		log_debug("created cached texture at %p", (void*)a->composite_cache[cache_slot].tex);
 	}
 
-	portrait_render_byname(a->name, a->variant, a->face, &a->composite);
-	log_debug("created texture at %p", (void*)a->composite.tex);
-	a->composite_dirty = false;
+	a->composite = a->composite_cache[cache_slot];
+	a->composite_anim_frame = sequence_frame;
 }
 
 void dialog_draw(Dialog *dialog) {
@@ -243,9 +289,10 @@ void dialog_draw(Dialog *dialog) {
 	}
 
 	float o = dialog->opacity;
+	const int portrait_anim_frame = global.frames / 4;
 
 	for(DialogActor *a = dialog->actors.first; a; a = a->next) {
-		dialog_actor_update_composite(a);
+		dialog_actor_update_composite(a, portrait_anim_frame);
 	}
 
 	r_state_push();
@@ -255,10 +302,13 @@ void dialog_draw(Dialog *dialog) {
 	r_mat_mv_push();
 	r_mat_mv_translate(VIEWPORT_X, 0, 0);
 
-	const double dialog_width = VIEWPORT_W * 1.2;
+	const float portrait_layer_y = 64.0f;
+	const float dialog_box_height = 110.0f;
+	const float dialog_box_top = VIEWPORT_H - dialog_box_height;
+	const float portrait_safe_inset = 32.0f;
 
 	r_mat_mv_push();
-	r_mat_mv_translate(dialog_width/2.0, 64, 0);
+	r_mat_mv_translate(0, portrait_layer_y, 0);
 
 	Color clr = {};
 
@@ -267,21 +317,15 @@ void dialog_draw(Dialog *dialog) {
 			continue;
 		}
 
-		dialog_actor_update_composite(a);
+		dialog_actor_update_composite(a, portrait_anim_frame);
 		Sprite *portrait = &a->composite;
 		assume(portrait->tex != NULL);
 
 		r_mat_mv_push();
 
-		if(a->side == DIALOG_SIDE_LEFT) {
-			r_cull(CULL_FRONT);
-			r_mat_mv_scale(-1, 1, 1);
-		} else {
-			r_cull(CULL_BACK);
-		}
-
 		if(a->opacity < 1) {
-			r_mat_mv_translate(120 * (1 - a->opacity), 0, 0);
+			float enter_dir = a->side == DIALOG_SIDE_LEFT ? -1.0f : 1.0f;
+			r_mat_mv_translate(120 * (1 - a->opacity) * enter_dir, 0, 0);
 		}
 
 		float ofs = 10 * (1 - a->focus);
@@ -292,12 +336,29 @@ void dialog_draw(Dialog *dialog) {
 
 		color_mul_scalar(&clr, a->opacity);
 
+		float anim_phase = global.frames / 42.0f + (uintptr_t)a * (1.0f / 8192.0f);
+		float portrait_top = 12.0f - portrait_layer_y;
+		float portrait_bottom = dialog_box_top - portrait_layer_y - 18.0f;
+		float portrait_fit_h = 0.970f * (portrait_bottom - portrait_top) / max(1.0f, portrait->h);
+		float portrait_fit_w = (VIEWPORT_W * 0.48f - portrait_safe_inset) / max(1.0f, portrait->w);
+		float portrait_fit = min(1.0f, min(portrait_fit_h, portrait_fit_w));
+		bool static_pose = dialog_portrait_static_pose();
+		float breathe_x = portrait_fit * (static_pose ? 1.0f : (1.0f + 0.004f * sin(anim_phase)));
+		float breathe_y = portrait_fit * (static_pose ? 1.0f : (1.0f + 0.008f * sin(anim_phase + 1.4f)));
+		float bob = static_pose ? 0.0f : (1.4f + 1.4f * a->focus) * sin(anim_phase * 0.73f);
+		float portrait_w = portrait->w * breathe_x;
+		float center_x = a->side == DIALOG_SIDE_LEFT
+			? portrait_safe_inset + portrait_w * 0.5f
+			: VIEWPORT_W - portrait_safe_inset - portrait_w * 0.5f;
+
 		r_flush_sprites();
 		r_draw_sprite(&(SpriteParams) {
 			.blend = BLEND_PREMUL_ALPHA,
 			.color = &clr,
-			.pos.x = (dialog_width - portrait->w) / 2 + 32 + a->offset.x,
-			.pos.y = VIEWPORT_H - portrait->h / 2 + a->offset.y,
+			.pos.x = center_x + a->offset.x,
+			.pos.y = portrait_bottom - portrait->h * breathe_y * 0.5f + a->offset.y + bob,
+			.scale = { breathe_x, breathe_y },
+			.flip.x = a->side == DIALOG_SIDE_LEFT,
 			.sprite_ptr = portrait,
 		});
 
@@ -308,8 +369,8 @@ void dialog_draw(Dialog *dialog) {
 	r_state_pop();
 
 	FloatRect dialog_bg_rect = {
-		.extent = { VIEWPORT_W-40, 110 },
-		.offset = { VIEWPORT_W/2, VIEWPORT_H-55 },
+		.extent = { VIEWPORT_W-40, dialog_box_height },
+		.offset = { VIEWPORT_W/2, VIEWPORT_H - dialog_box_height * 0.5f },
 	};
 
 	r_mat_mv_push();
